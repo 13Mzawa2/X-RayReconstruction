@@ -26,6 +26,13 @@ namespace cvutil
 		if (r.depth() == CV_32F) return (double)r.at<float>(1, 1);
 		else return (double)r.at<uchar>(1, 1);
 	}
+	//	完全にMatの中身を入れ替えるswap関数
+	//	通常のswap()はROIの中身までは入れ替えてくれない
+	void swapMat(cv::Mat &m1, cv::Mat &m2)
+	{
+		Mat tmp;
+		m1.copyTo(tmp); m2.copyTo(m1); tmp.copyTo(m2);
+	}
 }
 
 int main(void) 
@@ -43,12 +50,14 @@ int main(void)
 	//	画像の保存
 	imwrite("input.png", src);
 
+	//---------------------------------------
 	//	2. 1次元X線投影像を全周方向で撮影
-	const int div_rotation = 360;						//	360分割して撮影
+	//---------------------------------------
+	const int div_rotation = 180;						//	360分割して撮影
 	Mat projectedImage(820, div_rotation, CV_64FC1);	//	投影像ベクトルの集合　列数が角度
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
-		double theta = CV_PI / div_rotation * th;		//	角度radに変換
+		double theta = CV_PI / div_rotation * th;		//	角度radに変換（全部で180deg）
 		//	投影像位置j
 		for (int j = 0; j < projectedImage.rows; j++) {
 			double r = j - projectedImage.rows / 2.0;	//	rは動径，jの原点を中央にしたもの
@@ -100,12 +109,64 @@ int main(void)
 	cout << endl << "capture finished!!" << endl;
 	//	360deg投影像を表示
 	Mat projectedImage8;
-	projectedImage.convertTo(projectedImage8, CV_8UC1);
+	//projectedImage.convertTo(projectedImage8, CV_8UC1);
+	normalize(projectedImage, projectedImage8, 0, 1, CV_MINMAX);
 	imshow("X線投影像", projectedImage8);
 	waitKey();
 	//	画像の保存
 	imwrite("x-ray_projection.png", projectedImage8);
 
+	//---------------------------------------------------------------------------------------------
+	//	3. 投影像からの再構成（フーリエ変換法）
+	//	投影像の角度固定1次元(r)フーリエ変換＝元画像の2次元(x,y)フーリエ変換　という数学的事実を利用する．
+	//	角度thでの投影像の１次元フーリエ変換結果を，周波数平面uv上の角度thの方向に並べてから
+	//	平面uvを２次元逆フーリエ変換すると元画像が復元される．
+	//---------------------------------------------------------------------------------------------
+	//	3.1 まずはDFTに慣れるために元画像のFFTを行う．
+	//	DFTに最適なサイズを取得（元画像より大きい）
+	Size optDFTSize(getOptimalDFTSize(src.cols),getOptimalDFTSize(src.rows));
+	Mat optDFTImg;		//	元画像の余りを0で埋めた画像
+	copyMakeBorder(src, optDFTImg, 0, optDFTSize.height - src.rows, 0, optDFTSize.width - src.cols, BORDER_CONSTANT, Scalar::all(0));
+	//複素数画像complexImg（実部ch/虚部chの2ch）を生成
+	Mat complexPlanes[] = { Mat_<float>(optDFTImg), Mat::zeros(optDFTSize, CV_32F) };
+	Mat complexImg;		//	ここにDFTの結果が入る
+	merge(complexPlanes, 2, complexImg);
+	//	DFT実行（実際にはFFT）
+	dft(complexImg, complexImg, CV_DXT_FORWARD);
+	//	DFT結果表示用にパワースペクトル画像に変換
+	//	複素数のL2ノルムの対数
+	split(complexImg, complexPlanes);
+	Mat magImg;
+	magnitude(complexPlanes[0], complexPlanes[1], magImg);		//	複素数要素のノルムを格納
+	magImg += Scalar::all(1);	//	対数化のためのオフセット
+	log(magImg, magImg);		//	値を対数化
+	//	DFT画像は四隅が低周波になって出力されるので，中央を直流成分に見せるために入れ替える
+	magImg = magImg(Rect(0, 0, magImg.cols & -2, magImg.rows & -2));	//	DFT最適サイズは奇数の時もある
+	Point2d center(src.cols / 2.0, src.rows / 2.0);
+	Mat tmp;
+	Mat q0(magImg, Rect(0, 0, center.x, center.y));
+	Mat q1(magImg, Rect(center.x, 0, center.x, center.y));
+	Mat q2(magImg, Rect(0, center.y, center.x, center.y));
+	Mat q3(magImg, Rect(center.x, center.y, center.x, center.y));
+	cvutil::swapMat(q0, q3); cvutil::swapMat(q1, q2);
+	normalize(magImg, magImg, 0, 1, CV_MINMAX);
+	imshow("元画像のFFT結果", magImg);
+	//	逆フーリエ変換
+	Mat invDFTImg;
+	Mat invDFTplanes[] = { Mat_<float>(optDFTImg), Mat::zeros(optDFTSize, CV_32F) };
+	dft(complexImg, invDFTImg, DFT_INVERSE + DFT_SCALE);
+	split(invDFTImg, invDFTplanes);
+	Mat invDFTImg_scaled;
+	normalize(invDFTplanes[0], invDFTImg_scaled, 0, 1, CV_MINMAX);
+	imshow("逆FFT結果", invDFTImg_scaled);
+	waitKey();
 
+	//---------------------------------------------------------------------------------------------
+	//	4. 投影像からの再構成（フィルタ補正逆投影法）
+	//	周波数領域での積が空間領域での畳込み演算として記述可能なことを利用する．
+	//	フーリエ変換法における投影像の１次元フーリエ変換は，投影像に高域強調フィルタ|s|を畳み込む演算と
+	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xyの角度th上に並べてやると
+	//	元画像が平面xyに復元される．
+	//---------------------------------------------------------------------------------------------
 	return 0;
 }
