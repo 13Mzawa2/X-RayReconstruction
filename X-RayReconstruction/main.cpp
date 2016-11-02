@@ -1,5 +1,5 @@
 #include <opencv2\opencv.hpp>
-
+#include "CVUtil.h"
 #pragma region OPENCV3_LIBRARY_LINKER
 #ifdef _DEBUG
 #define CV_EXT "d.lib"
@@ -13,27 +13,6 @@
 using namespace cv;
 using namespace std;
 
-namespace cvutil 
-{
-	//	グレースケール画像mの要素をサブピクセル座標pから取得する
-	//	通常のMat::at()メソッドでは四捨五入された座標から取得されてしまうのでcv::getRectSubPix()を利用する
-	//	画像範囲外は境界線と同じとする
-	//	サポートする型はCV_32F or CV_8U
-	double sampleSubPix(cv::Mat m, cv::Point2d p)
-	{
-		Mat r;
-		cv::getRectSubPix(m, cv::Size(3,3), p, r);
-		if (r.depth() == CV_32F) return (double)r.at<float>(1, 1);
-		else return (double)r.at<uchar>(1, 1);
-	}
-	//	完全にMatの中身を入れ替えるswap関数
-	//	通常のswap()はROIの中身までは入れ替えてくれない
-	void swapMat(cv::Mat &m1, cv::Mat &m2)
-	{
-		Mat tmp;
-		m1.copyTo(tmp); m2.copyTo(m1); tmp.copyTo(m2);
-	}
-}
 
 int main(void) 
 {
@@ -53,7 +32,7 @@ int main(void)
 	//---------------------------------------
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
-	const int div_rotation = 180;						//	360分割して撮影
+	const int div_rotation = 360;						//	360分割して撮影
 	Mat projectedImage(820, div_rotation, CV_64FC1);	//	投影像ベクトルの集合　列数が角度
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
@@ -108,13 +87,13 @@ int main(void)
 	imshow("test", src);
 	cout << endl << "capture finished!!" << endl;
 	//	360deg投影像を表示
-	Mat projectedImage8;
-	//projectedImage.convertTo(projectedImage8, CV_8UC1);
-	normalize(projectedImage, projectedImage8, 0, 1, CV_MINMAX);
-	imshow("X線投影像", projectedImage8);
+	Mat projectedImage_scaled;
+	normalize(projectedImage, projectedImage_scaled, 0, 1, CV_MINMAX);
+	imshow("X線投影像", projectedImage_scaled);
 	waitKey();
 	//	画像の保存
-	imwrite("x-ray_projection.png", projectedImage8);
+	projectedImage.convertTo(projectedImage_scaled, CV_8UC1);
+	imwrite("x-ray_projection.png", projectedImage_scaled);
 
 	//---------------------------------------------------------------------------------------------
 	//	3. 投影像からの再構成（フーリエ変換法）
@@ -122,7 +101,7 @@ int main(void)
 	//	角度thでの投影像の１次元フーリエ変換結果を，周波数平面uv上の角度thの方向に並べてから
 	//	平面uvを２次元逆フーリエ変換すると元画像が復元される．
 	//---------------------------------------------------------------------------------------------
-	//	3.1 まずはDFTに慣れるために元画像のFFTを行う．
+	//	3.1 まずはDFTに慣れるために元画像のFFTを行う（自分の学習用）．
 	//	DFTに最適なサイズを取得（元画像より大きい）
 	Size optDFTSize(getOptimalDFTSize(src.cols),getOptimalDFTSize(src.rows));
 	Mat optDFTImg;		//	元画像の余りを0で埋めた画像
@@ -132,7 +111,7 @@ int main(void)
 	Mat complexImg;		//	ここにDFTの結果が入る
 	merge(complexPlanes, 2, complexImg);
 	//	DFT実行（実際にはFFT）
-	dft(complexImg, complexImg, CV_DXT_FORWARD);
+	dft(complexImg, complexImg, DFT_COMPLEX_OUTPUT);
 	//	DFT結果表示用にパワースペクトル画像に変換
 	//	複素数のL2ノルムの対数
 	split(complexImg, complexPlanes);
@@ -151,15 +130,43 @@ int main(void)
 	cvutil::swapMat(q0, q3); cvutil::swapMat(q1, q2);
 	normalize(magImg, magImg, 0, 1, CV_MINMAX);
 	imshow("元画像のFFT結果", magImg);
+	//	結果の保存
+	normalize(magImg, magImg, 0, 255, CV_MINMAX);
+	magImg.convertTo(magImg, CV_8UC1);
+	imwrite("FFT_spectrum_from_src.png", magImg);
 	//	逆フーリエ変換
 	Mat invDFTImg;
 	Mat invDFTplanes[] = { Mat_<float>(optDFTImg), Mat::zeros(optDFTSize, CV_32F) };
-	dft(complexImg, invDFTImg, DFT_INVERSE + DFT_SCALE);
-	split(invDFTImg, invDFTplanes);
+	dft(complexImg, invDFTImg, DFT_INVERSE + DFT_SCALE);	//	FFT結果をそのまま逆FFTにかける
+	split(invDFTImg, invDFTplanes);		//	逆DFTの結果は実部に出てくる
 	Mat invDFTImg_scaled;
 	normalize(invDFTplanes[0], invDFTImg_scaled, 0, 1, CV_MINMAX);
 	imshow("逆FFT結果", invDFTImg_scaled);
+	//	結果の保存
+	normalize(invDFTplanes[0], invDFTImg_scaled, 0, 255, CV_MINMAX);
+	invDFTImg_scaled.convertTo(invDFTImg_scaled, CV_8UC1);
+	imwrite("inverseFFT_from_src.png", invDFTImg_scaled);
 	waitKey();
+
+	////	3.2 投影像を１次元フーリエ変換する
+	//int dftSize = getOptimalDFTSize(projectedImage.rows);
+	//Mat optDFTImage = projectedImage.t();		//	行と列を入れ替え（行：r軸正，列：th軸正）
+	//copyMakeBorder(optDFTImage, optDFTImage, 0, 0, 0, dftSize - projectedImage.rows, BORDER_CONSTANT, Scalar::all(0));
+	////	１次元フーリエ変換のための複素数画像を生成
+	//Mat DFTPlane;
+	//Mat complexDFTPlanes[] = { Mat_<float>(optDFTImage), Mat::zeros(optDFTImage.size(), CV_32F) };
+	//merge(complexDFTPlanes, 2, DFTPlane);
+	////	行毎に１次元FFTを一気に実行
+	//dft(DFTPlane, DFTPlane, DFT_COMPLEX_OUTPUT | DFT_ROWS, projectedImage.rows);
+	////	各行をDFT画像に角度毎に格納
+	//Mat invDFTImage;
+	//Mat complexInvDFTImage(optDFTSize, CV_32FC2, Scalar::all(0));
+	//for (int th = 0; th < div_rotation; th++) {
+	//	double theta = CV_PI / div_rotation * th;		//	角度radに変換（全部で180deg）
+	//	Mat projectionPlane = projectedImage.col(th);	//	角度thでの投影像を取り出す
+	//	
+	//	
+	//}
 
 	//---------------------------------------------------------------------------------------------
 	//	4. 投影像からの再構成（フィルタ補正逆投影法）
