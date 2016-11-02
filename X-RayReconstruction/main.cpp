@@ -13,17 +13,35 @@
 using namespace cv;
 using namespace std;
 
+namespace cvutil 
+{
+	//	グレースケール画像mの要素をサブピクセル座標pから取得する
+	//	通常のMat::at()メソッドでは四捨五入された座標から取得されてしまうのでcv::getRectSubPix()を利用する
+	//	画像範囲外は境界線と同じとする
+	//	サポートする型はCV_32F or CV_8U
+	double sampleSubPix(cv::Mat m, cv::Point2d p)
+	{
+		Mat r;
+		cv::getRectSubPix(m, cv::Size(3,3), p, r);
+		if (r.depth() == CV_32F) return (double)r.at<float>(1, 1);
+		else return (double)r.at<uchar>(1, 1);
+	}
+}
+
 int main(void) 
 {
 	//	1. 画像の読み込み
 	Mat test = imread("doge.jpg", IMREAD_GRAYSCALE);
-	Mat src;
+	Mat src, srcf;		//	実際の演算はsrcfの画素値を使う
 	resize(test, src, Size(640, 480), INTER_CUBIC);
+	src.convertTo(srcf, CV_32F);
 	cout << "loaded image information:\n"
 		<< "image size = " << src.size()
 		<< endl;
 	imshow("test", src);
 	waitKey();
+	//	画像の保存
+	imwrite("input.png", src);
 
 	//	2. 1次元X線投影像を全周方向で撮影
 	const int div_rotation = 360;						//	360分割して撮影
@@ -50,7 +68,8 @@ int main(void)
 					|| p_src.y < 0 || p_src.y > src.rows-1) {
 					break;
 				}
-				pix += (double)src.at<uchar>(p_src);
+				//pix += (double)src.at<uchar>(p_src);
+				pix += cvutil::sampleSubPix(srcf, p_src);
 			}
 			//	負方向に積算　ただし中央は重複加算しないように開始位置はずらす
 			for (int i = 1; ; i++, count++) {
@@ -61,18 +80,32 @@ int main(void)
 					|| p_src.y < 0 || p_src.y > src.rows-1) {
 					break;
 				}
-				pix += (double)src.at<uchar>(p_src);
+				//pix += (double)src.at<uchar>(p_src);
+				pix += cvutil::sampleSubPix(srcf, p_src);
 			}
-			projectedImage.at<double>(j, th) = pix / count;		//	積算結果を投影像に投影
+			projectedImage.at<double>(j, th) = pix / count;		//	積算結果を投影直線に投影
 		}
+		//	処理の描画用
+		Mat xraycap(src.size(), CV_8UC3);
+		cvtColor(src, xraycap, COLOR_GRAY2BGR);
+		Point2d center(src.cols / 2.0, src.rows / 2.0); 
+		Point2d rminus(center.x - center.x*cos(theta), center.y + center.y*sin(theta));
+		Point2d rplus(center.x + center.x*cos(theta), center.y - center.y*sin(theta));
+		line(xraycap, rminus, rplus, Scalar(0, 0, 255), 1, CV_AA);
+		imshow("test", xraycap);
+		waitKey(1);
 		cout << "captureing X-ray... : " << th << " / " << div_rotation << "\r";
 	}
+	imshow("test", src);
 	cout << endl << "capture finished!!" << endl;
 	//	360deg投影像を表示
 	Mat projectedImage8;
 	projectedImage.convertTo(projectedImage8, CV_8UC1);
 	imshow("X線投影像", projectedImage8);
 	waitKey();
+	//	画像の保存
+	imwrite("x-ray_projection.png", projectedImage8);
+
 
 	return 0;
 }
