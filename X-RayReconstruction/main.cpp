@@ -14,7 +14,7 @@ using namespace cv;
 using namespace std;
 
 
-int main(void) 
+int main(void)
 {
 	//	1. 画像の読み込み
 	Mat src_read = imread("doge.jpg", IMREAD_GRAYSCALE);
@@ -33,67 +33,44 @@ int main(void)
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
 	const int div_rotation = 360;						//	360分割して撮影
-	Mat projectedImage(460, div_rotation, CV_64FC1);	//	投影像ベクトルの集合　列数が角度
+	Mat projectedImage = Mat::zeros(div_rotation, 480, CV_64FC1);	//	投影像ベクトルの集合　行数が角度
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
 		double theta = CV_PI / div_rotation * th;		//	角度radに変換（全部で180deg）
-		//	投影像位置j
-		for (int j = 0; j < projectedImage.rows; j++) {
-			double r = j - projectedImage.rows / 2.0;	//	rは動径，jの原点を中央にしたもの
-			double pix = 0.0;			//	積算結果格納用
-			//	画像中心を原点，画像上向きをY軸正としたときの，積算開始位置
-			Point2d origin(r*cos(theta), r*sin(theta));
-			//	積算方向単位ベクトル
-			Point2d n(-sin(theta), cos(theta));
-			//	画素の積算　終了条件は画像範囲外に出たとき
-			int count = 0;
-			//	正方向に積算
-			for (int i = 0; ; i++, count++) {
-				Point2d p = origin + i*n;
-				Point2d p_src(p.x + src.cols / 2, -p.y + src.rows / 2);
-				//	現在の積算位置が画像範囲外に出たら終了
-				if (p_src.x < 0 || p_src.x > src.cols-1
-					|| p_src.y < 0 || p_src.y > src.rows-1) {
-					break;
-				}
-				//pix += (double)src.at<uchar>(p_src);
-				pix += cvutil::sampleSubPix(srcf, p_src);
+		//	画像を回転
+		Mat rotatedImage;
+		Mat affine = getRotationMatrix2D(Point2d(src.cols / 2, src.rows / 2), -theta / CV_PI * 180, 1.0);		//	アフィン変換行列
+		warpAffine(srcd, rotatedImage, affine, src.size());
+		//	画像下からX線を当てて画像上部で撮影
+		Mat reduceRow, clippedRow;
+		reduce(rotatedImage, reduceRow, 0, REDUCE_AVG);	//　行をそのまま平均化
+		if (projectedImage.cols < reduceRow.cols) {
+			for (int i = 0; i < projectedImage.cols; i++) {
+				projectedImage.row(th).at<double>(i)
+					= reduceRow.at<double>(i + reduceRow.cols / 2 - projectedImage.cols / 2);
 			}
-			//	負方向に積算　ただし中央は重複加算しないように開始位置はずらす
-			for (int i = 1; ; i++, count++) {
-				Point2d p = origin - i*n;
-				Point2d p_src(p.x + src.cols / 2, -p.y + src.rows / 2);
-				//	現在の積算位置が画像範囲外に出たら終了
-				if (p_src.x < 0 || p_src.x > src.cols-1
-					|| p_src.y < 0 || p_src.y > src.rows-1) {
-					break;
-				}
-				//pix += (double)src.at<uchar>(p_src);
-				pix += cvutil::sampleSubPix(srcf, p_src);
-			}
-			projectedImage.at<double>(j, th) = pix / count;		//	積算結果を投影直線に投影
 		}
-		//	処理の描画用
-		Mat xraycap(src.size(), CV_8UC3);
-		cvtColor(src, xraycap, COLOR_GRAY2BGR);
-		Point2d center(src.cols / 2.0, src.rows / 2.0); 
-		Point2d rminus(center.x - center.x*cos(theta), center.y + center.y*sin(theta));
-		Point2d rplus(center.x + center.x*cos(theta), center.y - center.y*sin(theta));
-		line(xraycap, rminus, rplus, Scalar(0, 0, 255), 1, CV_AA);
-		imshow("test", xraycap);
+		else {
+			for (int i = 0; i < reduceRow.cols; i++) {
+				projectedImage.row(th).at<double>(i - reduceRow.cols / 2 + projectedImage.cols / 2)
+					= reduceRow.at<double>(i);
+			}
+		}
+		//	撮影中画像を表示
+		normalize(rotatedImage, rotatedImage, 0, 1, CV_MINMAX);
+		imshow("test", rotatedImage);
+		Mat projectedImage_scaled;
+		projectedImage.convertTo(projectedImage_scaled, CV_8UC1);
+		imshow("X線投影像", projectedImage_scaled);
 		waitKey(1);
-		cout << "captureing X-ray... : " << th << " / " << div_rotation << "\r";
 	}
 	imshow("test", src);
 	cout << endl << "capture finished!!" << endl;
 	//	360deg投影像を表示
-	Mat projectedImage_scaled;
 	//normalize(projectedImage, projectedImage_scaled, 0, 1, CV_MINMAX);
-	projectedImage.convertTo(projectedImage_scaled, CV_8UC1);
-	imshow("X線投影像", projectedImage_scaled);
 	waitKey();
 	//	画像の保存
-	imwrite("x-ray_projection.png", projectedImage_scaled);
+	imwrite("x-ray_projection.png", projectedImage);
 
 	//---------------------------------------------------------------------------------------------
 	//	3. 投影像からの再構成（フーリエ変換法）
@@ -139,111 +116,78 @@ int main(void)
 	//normalize(invDFTplanes[0], invDFTImg_scaled, 0, 255, CV_MINMAX);
 	//invDFTImg_scaled.convertTo(invDFTImg_scaled, CV_8UC1);
 	//imwrite("inverseFFT_from_src.png", invDFTImg_scaled);
-	//waitKey();
+	waitKey();
 
-	//	3.1 投影像を１次元フーリエ変換する
-	Mat optDFTImage_sth = projectedImage.t();		//	行と列を入れ替え（行：r軸正，列：th軸正）
-	int dftSize = getOptimalDFTSize(optDFTImage_sth.cols);
-	copyMakeBorder(optDFTImage_sth, optDFTImage_sth, 0, 0, 0, dftSize - optDFTImage_sth.cols, BORDER_CONSTANT, Scalar::all(0));
-	//	１次元フーリエ変換のための複素数画像を生成
-	Mat complexDFTImage_sth;		//	DFT結果格納用
-	Mat complexDFTPlanes_sth[] = { Mat_<double>(optDFTImage_sth), Mat::zeros(optDFTImage_sth.size(), CV_64FC1) };
-	merge(complexDFTPlanes_sth, 2, complexDFTImage_sth);
-	//	画像表示
-	cout << "projection image size = " << optDFTImage_sth.size() << endl;
-	Mat optDFTImage_sth_scaled;
-	normalize(complexDFTPlanes_sth[0], optDFTImage_sth_scaled, 0, 255, CV_MINMAX);
-	optDFTImage_sth_scaled.convertTo(optDFTImage_sth_scaled, CV_8UC1);
-	imshow("1次元DFT結果", optDFTImage_sth_scaled);
-	waitKey(); 
-	//	行毎に１次元FFTを一気に実行 (r, th)->(s, th)
-	dft(complexDFTImage_sth, complexDFTImage_sth, DFT_ROWS, projectedImage.rows);
-	cvutil::fftShift1D(complexDFTImage_sth, complexDFTImage_sth);
-	//	１次元FFT結果を実部と虚部に分ける
-	split(complexDFTImage_sth, complexDFTPlanes_sth);
+	//	1. 撮影画像g(r, th)を1次元フーリエ変換してG(s, th)を得る
+	double optDFTSize_rth = getOptimalDFTSize(projectedImage.cols);
+	Mat optDFTImage_rth;
+	copyMakeBorder(projectedImage, optDFTImage_rth, 0, 0, 0, optDFTSize_rth - projectedImage.cols, BORDER_CONSTANT, Scalar::all(0));
+	//	複素数画像を作成
+	Mat complexDFTPlanes_rth[] = { Mat_<double>(optDFTImage_rth), Mat::zeros(optDFTImage_rth.size(), CV_64F) };
+	Mat complexDFTImage_rth;
+	merge(complexDFTPlanes_rth, 2, complexDFTImage_rth);
+	//	1次元DFT実行
+	dft(complexDFTImage_rth, complexDFTImage_rth, DFT_ROWS);
+	cvutil::fftShift1D(complexDFTImage_rth, complexDFTImage_rth);	//	FFT画像反転
+	//	DFT結果表示
+	split(complexDFTImage_rth, complexDFTPlanes_rth);
+	Mat magImage_rth;
+	magnitude(complexDFTPlanes_rth[0], complexDFTPlanes_rth[1], magImage_rth);
+	magImage_rth += Scalar::all(1);
+	log(magImage_rth, magImage_rth);
+	normalize(magImage_rth, magImage_rth, 0, 1, CV_MINMAX);
+	imshow("X線投影像1次元FFT結果", magImage_rth);
 
-	//	投影像自体が復元できるか確認
-	Mat test, test_fft = complexDFTImage_sth.clone();
-	Mat testplane[] = { Mat::zeros(optDFTImage_sth.size(), CV_64F),Mat::zeros(optDFTImage_sth.size(), CV_64F) };
-	////	高周波成分カットマスク画像
-	//Mat mask = Mat::zeros(test_fft.size(), CV_64FC2);
-	//rectangle(mask, Point(50, 0), Point(mask.cols - 50, mask.rows), Scalar::all(1.0), -1);
-	//test_fft = test_fft.mul(mask);
-	split(test_fft, testplane);
-	//	1次元DFT結果を画像出力
-	Mat DFTImage_scaled;
-	magnitude(testplane[0], testplane[1], DFTImage_scaled);
-	DFTImage_scaled += Scalar::all(1);
-	log(DFTImage_scaled, DFTImage_scaled);
-	normalize(DFTImage_scaled, DFTImage_scaled, 0, 255, CV_MINMAX);
-	DFTImage_scaled.convertTo(DFTImage_scaled, CV_8UC1);
-	imshow("1次元DFT結果", DFTImage_scaled);
-
-	//	高域強調フィルタ
-	for (int i = 0; i < complexDFTImage_sth.cols; i++) {
-		complexDFTImage_sth.col(i) *= abs(i - complexDFTImage_sth.cols / 2);
-	}
-	cvutil::fftShift1D(test_fft, test_fft);
-	dft(test_fft, test, DFT_INVERSE + DFT_SCALE + DFT_ROWS);
-	split(test, testplane);
-	Mat test_scaled;
-	normalize(testplane[0], test_scaled, 0, 1, CV_MINMAX);
-	imshow("投影像の逆FFT結果", test_scaled);
-
-	//	3.2 １次元フーリエ変換した画像を座標変換して(s,th)->(u,v)平面に変換
-	//	DFTに最適なサイズを取得（元画像より大きい）
-	Size optimalDFTSize_uv(getOptimalDFTSize(src.cols), getOptimalDFTSize(src.rows));
-	Mat complexDFTImage_uv(optimalDFTSize_uv, CV_64FC2, Scalar::all(0));		//	uv座標系
-	Point2d center_uv(optimalDFTSize_uv.width / 2, optimalDFTSize_uv.height / 2);
-	Mat complexDFTPlanes_sth_re, complexDFTPlanes_sth_im;
-	complexDFTPlanes_sth[0].convertTo(complexDFTPlanes_sth_re, CV_32F);
-	complexDFTPlanes_sth[1].convertTo(complexDFTPlanes_sth_im, CV_32F);
-	for (int i = 0; i < optimalDFTSize_uv.height; i++) {
-		for (int j = 0; j < optimalDFTSize_uv.width; j++) {
-			//	格納後の画素(j, i)に対応する格納前の画像座標をサブピクセル精度で割り出す
-			Point2d p_uv(j - center_uv.x, center_uv.y - i);		//	現在の画素のuv座標
-			double theta = atan2(p_uv.y, p_uv.x);		//	現在の画素の中心からの角度(rad, [-PI, PI])
+	//	2. G(s, th)をF(u,v)空間に並べ替える
+	//	u = s * cos(th), v = s * sin(th)
+	Size optDFTSize_uv(getOptimalDFTSize(src.cols), getOptimalDFTSize(src.rows));
+	Mat complexDFTPlanes_uv[] 
+		= { Mat::zeros(optDFTSize_uv, CV_64FC1), Mat::zeros(optDFTSize_uv, CV_64FC1) };
+	//	サブピクセルサンプリングのためにfloat型に変換
+	Mat complexDFTPlane_sth_re, complexDFTPlane_sth_im;
+	complexDFTPlanes_rth[0].convertTo(complexDFTPlane_sth_re, CV_32F);
+	complexDFTPlanes_rth[1].convertTo(complexDFTPlane_sth_im, CV_32F);
+	for (int i = 0; i < optDFTSize_uv.height; i++) {
+		for (int j = 0; j < optDFTSize_uv.width; j++) {
+			Point2d center_uv(optDFTSize_uv.width / 2, optDFTSize_uv.height / 2);
+			Point2d p_uv(j - center_uv.x, - i + center_uv.y);	//	現在のスコープ座標(u,v)
 			double radius = norm(p_uv);
-			double length = dftSize/2.0;			//	radiusの最大長さ
-			if (radius > length) {
-				complexDFTImage_uv.at<Vec2d>(i, j) = Vec2d(0, 0);
+			Point2d p_sth;					//	p_uvに対応するG(s, th)でのサンプル点
+			//	原点からの距離が投影像のr軸よりも大きい場合は0とする
+			if (radius > optDFTSize_rth / 2.0) {
+				complexDFTPlanes_uv[0].at<double>(i, j) = 0.0;	//	実部
+				complexDFTPlanes_uv[1].at<double>(i, j) = 0.0;	//	虚部
 				continue;
 			}
-			Point2d p_sth;		//	対応する(s,th)座標
-			p_sth.x = (theta > 0) ?
-				radius + dftSize/2
-				: -radius + dftSize / 2;		//	角度が負のとき:sが負でthは正
-			p_sth.y = (theta > 0) ?
-				optDFTImage_sth.rows / CV_PI * theta
-				: optDFTImage_sth.rows / CV_PI * (theta+CV_PI);	//	180degを投影像の数にマッピング
-			//	１次元FFTの結果画像からサンプル
-			double re = cvutil::sampleSubPix(complexDFTPlanes_sth_re, p_sth);
-			double im = cvutil::sampleSubPix(complexDFTPlanes_sth_im, p_sth);
-			complexDFTImage_uv.at<Vec2d>(i, j) = Vec2d(re, im);		//	2次元FFTの(i,j)要素にサンプル結果を代入
+			//	p_uvを変数変換してp_sthに代入
+			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
+			p_sth.x = (theta > 0) ? optDFTSize_rth/2.0 + radius : optDFTSize_rth/2.0 - radius;
+			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
+
+			complexDFTPlanes_uv[0].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
+			complexDFTPlanes_uv[1].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_im, p_sth);
 		}
 	}
-	//	DFT結果表示用にパワースペクトル画像に変換
-	//	複素数のL2ノルムの対数
-	Mat complexDFTPlanes_uv[] = { Mat::zeros(optimalDFTSize_uv, CV_64F), Mat::zeros(optimalDFTSize_uv, CV_64F) };
+	Mat complexDFTImage_uv;
+	merge(complexDFTPlanes_uv, 2, complexDFTImage_uv);
+	//	DFT結果表示
 	split(complexDFTImage_uv, complexDFTPlanes_uv);
-	Mat magImg_uv;
-	magnitude(complexDFTPlanes_uv[0], complexDFTPlanes_uv[1], magImg_uv);		//	複素数要素のノルムを格納
-	magImg_uv += Scalar::all(1);	//	対数化のためのオフセット
-	log(magImg_uv, magImg_uv);		//	値を対数化
-	//	DFT画像は四隅が低周波になって出力されるので，中央を直流成分に見せるために入れ替える
-	normalize(magImg_uv, magImg_uv, 0, 1, CV_MINMAX);
-	imshow("投影像から生成した２次元FFT", magImg_uv);
+	Mat magImage_uv;
+	magnitude(complexDFTPlanes_uv[0], complexDFTPlanes_uv[1], magImage_uv);
+	magImage_uv += Scalar::all(1);
+	log(magImage_uv, magImage_uv);
+	normalize(magImage_uv, magImage_uv, 0, 1, CV_MINMAX);
+	imshow("X線投影像2次元FFT復元結果", magImage_uv);
 
-	//	3.3 (u,v)平面画像を2次元逆フーリエ変換して元画像を得る
-	Mat complexInvDFTImage_xy;
+	//	3. F(u,v)からf(x,y)を復元
 	cvutil::fftShift(complexDFTImage_uv, complexDFTImage_uv);
-	dft(complexDFTImage_uv, complexInvDFTImage_xy, DFT_INVERSE + DFT_SCALE);
-	Mat complexInvDFTPlanes_xy[]= { Mat::zeros(optimalDFTSize_uv, CV_64F), Mat::zeros(optimalDFTSize_uv, CV_64F) };
-	split(complexInvDFTImage_xy, complexInvDFTPlanes_xy);
-	Mat invDFTImage_scaled;
-	normalize(complexInvDFTPlanes_xy[0], invDFTImage_scaled, 0, 255, CV_MINMAX);
-	invDFTImage_scaled.convertTo(invDFTImage_scaled, CV_8UC1);
-	imshow("投影像復元結果", invDFTImage_scaled);
+	Mat complexInvDFTImage;
+	dft(complexDFTImage_uv, complexInvDFTImage, DFT_INVERSE + DFT_SCALE);
+	Mat complexInvDFTPlanes[] = { Mat::zeros(optDFTSize_uv, CV_64F), Mat::zeros(optDFTSize_uv, CV_64F) };
+	split(complexInvDFTImage, complexInvDFTPlanes);
+	Mat invImage_scaled;
+	normalize(complexInvDFTPlanes[0], invImage_scaled, 0, 1, CV_MINMAX);
+	imshow("投影像からの復元結果", invImage_scaled);
 	waitKey();
 
 	//---------------------------------------------------------------------------------------------
@@ -253,5 +197,7 @@ int main(void)
 	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xyの角度th上に並べてやると
 	//	元画像が平面xyに復元される．
 	//---------------------------------------------------------------------------------------------
+	
+	
 	return 0;
 }
