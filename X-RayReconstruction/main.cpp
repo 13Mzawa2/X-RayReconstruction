@@ -33,7 +33,8 @@ int main(void)
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
 	const int div_rotation = 360;						//	360分割して撮影
-	Mat projectedImage = Mat::zeros(div_rotation, 480, CV_64FC1);	//	投影像ベクトルの集合　行数が角度
+	Mat projectedImage = Mat::zeros(div_rotation, 640, CV_64FC1);	//	投影像ベクトルの集合 行数が角度
+	Mat sampledImage = projectedImage.clone();
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
 		double theta = CV_PI / div_rotation * th;		//	角度radに変換（全部で180deg）
@@ -56,12 +57,18 @@ int main(void)
 					= reduceRow.at<double>(i);
 			}
 		}
+		for (int i = 0; i < sampledImage.cols; i++) {
+			sampledImage.row(th).at<double>(i) = rotatedImage.at<double>(rotatedImage.rows / 2, i);
+		}
 		//	撮影中画像を表示
 		normalize(rotatedImage, rotatedImage, 0, 1, CV_MINMAX);
 		imshow("test", rotatedImage);
 		Mat projectedImage_scaled;
+		Mat sampledImage_scaled;
 		projectedImage.convertTo(projectedImage_scaled, CV_8UC1);
+		sampledImage.convertTo(sampledImage_scaled, CV_8UC1);
 		imshow("X線投影像", projectedImage_scaled);
+		imshow("r-theta座標系", sampledImage_scaled);
 		waitKey(1);
 	}
 	imshow("test", src);
@@ -197,7 +204,50 @@ int main(void)
 	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xyの角度th上に並べてやると
 	//	元画像が平面xyに復元される．
 	//---------------------------------------------------------------------------------------------
-	
+	//	G(s, th)に高域強調フィルタをかけて逆変換
+	Mat complexDFTImage_rth_s = complexDFTImage_rth.clone();
+	for (int i = 0; i < complexDFTImage_rth_s.cols; i++) {
+		double d = abs(i - complexDFTImage_rth_s.cols/2);
+		complexDFTImage_rth_s.col(i) *= d;
+	}
+	cvutil::fftShift1D(complexDFTImage_rth_s, complexDFTImage_rth_s);
+	dft(complexDFTImage_rth_s, complexDFTImage_rth_s, DFT_INVERSE + DFT_SCALE + DFT_ROWS);
+	//	DFT結果表示
+	Mat complexDFTPlanes_rth_s[]
+		= { Mat::zeros(complexDFTImage_rth_s.size(), CV_64FC1), Mat::zeros(complexDFTImage_rth_s.size(), CV_64FC1) };
+	split(complexDFTImage_rth_s, complexDFTPlanes_rth_s);
+	Mat magImage_rth_s;
+	//magnitude(complexDFTPlanes_rth_s[0], complexDFTPlanes_rth_s[1], magImage_rth_s);
+	//magImage_rth_s += Scalar::all(1);
+	//log(magImage_rth_s, magImage_rth_s);
+	normalize(complexDFTPlanes_rth_s[0], magImage_rth_s, 0, 1, CV_MINMAX);
+	imshow("X線投影像1次元FFT+高域強調フィルタ", magImage_rth_s);
+
+	//	円形に並べる
+	Mat invDFTImage_filter = Mat::zeros(src.size(), CV_64FC1);
+	Mat magImage_rth_s_f;
+	magImage_rth_s.convertTo(magImage_rth_s_f, CV_32F);
+	for (int i = 0; i < src.rows; i++) {
+		for (int j = 0; j < src.cols; j++) {
+			Point2d center_uv(src.cols / 2, src.rows / 2);
+			Point2d p_uv(j - center_uv.x, -i + center_uv.y);	//	現在のスコープ座標(u,v)
+			double radius = norm(p_uv);
+			Point2d p_sth;					//	p_uvに対応するg(r, th)でのサンプル点
+			//	原点からの距離が投影像のr軸よりも大きい場合は0とする
+			if (radius > optDFTSize_rth / 2.0) {
+				invDFTImage_filter.at<double>(i, j) = 0.0;
+				continue;
+			}
+			//	p_uvを変数変換してp_sthに代入
+			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
+			p_sth.x = (theta > 0) ? optDFTSize_rth / 2.0 + radius : optDFTSize_rth / 2.0 - radius;
+			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
+			invDFTImage_filter.at<double>(i, j) = cvutil::sampleSubPix(magImage_rth_s_f, p_sth);
+		}
+	}
+	imshow("高域強調フィルタの結果", invDFTImage_filter);
+
+	waitKey();
 	
 	return 0;
 }
