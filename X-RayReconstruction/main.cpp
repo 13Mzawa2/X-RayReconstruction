@@ -33,32 +33,37 @@ int main(void)
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
 	const int div_rotation = 360;						//	360分割して撮影
-	Mat projectedImage = Mat::zeros(div_rotation, 640, CV_64FC1);	//	投影像ベクトルの集合 行数が角度
+	Mat projectedImage = Mat::zeros(div_rotation, 820, CV_64FC1);	//	投影像ベクトルの集合 行数が角度
 	Mat sampledImage = projectedImage.clone();
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
 		double theta = CV_PI / div_rotation * th;		//	角度radに変換（全部で180deg）
 		//	画像を回転
 		Mat rotatedImage;
-		Mat affine = getRotationMatrix2D(Point2d(src.cols / 2, src.rows / 2), -theta / CV_PI * 180, 1.0);		//	アフィン変換行列
-		warpAffine(srcd, rotatedImage, affine, src.size());
+		int offsety = projectedImage.cols - srcd.rows;
+		int offsetx = projectedImage.cols - srcd.cols;
+		copyMakeBorder(srcd, rotatedImage, offsety / 2, offsety / 2, offsetx / 2, offsetx / 2, BORDER_CONSTANT, Scalar::all(0));
+		Mat affine = getRotationMatrix2D(Point2d(rotatedImage.cols / 2, rotatedImage.rows / 2), -theta / CV_PI * 180, 1.0);		//	アフィン変換行列
+		warpAffine(rotatedImage, rotatedImage, affine, rotatedImage.size());
 		//	画像下からX線を当てて画像上部で撮影
 		Mat reduceRow, clippedRow;
 		reduce(rotatedImage, reduceRow, 0, REDUCE_AVG);	//　行をそのまま平均化
 		if (projectedImage.cols < reduceRow.cols) {
 			for (int i = 0; i < projectedImage.cols; i++) {
 				projectedImage.row(th).at<double>(i)
-					= reduceRow.at<double>(i + reduceRow.cols / 2 - projectedImage.cols / 2);
+					= reduceRow.at<double>(i + reduceRow.cols / 2 - projectedImage.cols / 2); 
+				sampledImage.row(th).at<double>(i) 
+					= rotatedImage.at<double>(rotatedImage.rows / 2, reduceRow.cols / 2 - projectedImage.cols / 2);
 			}
 		}
 		else {
 			for (int i = 0; i < reduceRow.cols; i++) {
 				projectedImage.row(th).at<double>(i - reduceRow.cols / 2 + projectedImage.cols / 2)
 					= reduceRow.at<double>(i);
+				sampledImage.row(th).at<double>(i - reduceRow.cols / 2 + projectedImage.cols / 2)
+					= rotatedImage.at<double>(rotatedImage.rows / 2, i);
+
 			}
-		}
-		for (int i = 0; i < sampledImage.cols; i++) {
-			sampledImage.row(th).at<double>(i) = rotatedImage.at<double>(rotatedImage.rows / 2, i);
 		}
 		//	撮影中画像を表示
 		normalize(rotatedImage, rotatedImage, 0, 1, CV_MINMAX);
@@ -106,10 +111,10 @@ int main(void)
 	log(magImg, magImg);		//	値を対数化
 	normalize(magImg, magImg, 0, 1, CV_MINMAX);
 	imshow("元画像のFFT結果", magImg);
-	////	結果の保存
-	//normalize(magImg, magImg, 0, 255, CV_MINMAX);
-	//magImg.convertTo(magImg, CV_8UC1);
-	//imwrite("FFT_spectrum_from_src.png", magImg);
+	//	結果の保存
+	normalize(magImg, magImg, 0, 255, CV_MINMAX);
+	magImg.convertTo(magImg, CV_8UC1);
+	imwrite("FFT_spectrum_from_src.png", magImg);
 	//	逆フーリエ変換
 	Mat invDFTImg= complexImg;
 	Mat invDFTplanes[] = { Mat_<double>(optDFTImg), Mat::zeros(optDFTSize, CV_64F) };
@@ -119,10 +124,10 @@ int main(void)
 	Mat invDFTImg_scaled;
 	normalize(invDFTplanes[0], invDFTImg_scaled, 0, 1, CV_MINMAX);
 	imshow("元画像の逆FFT結果", invDFTImg_scaled);
-	////	結果の保存
-	//normalize(invDFTplanes[0], invDFTImg_scaled, 0, 255, CV_MINMAX);
-	//invDFTImg_scaled.convertTo(invDFTImg_scaled, CV_8UC1);
-	//imwrite("inverseFFT_from_src.png", invDFTImg_scaled);
+	//	結果の保存
+	normalize(invDFTplanes[0], invDFTImg_scaled, 0, 255, CV_MINMAX);
+	invDFTImg_scaled.convertTo(invDFTImg_scaled, CV_8UC1);
+	imwrite("inverseFFT_from_src.png", invDFTImg_scaled);
 	waitKey();
 
 	//	1. 撮影画像g(r, th)を1次元フーリエ変換してG(s, th)を得る
@@ -144,10 +149,14 @@ int main(void)
 	log(magImage_rth, magImage_rth);
 	normalize(magImage_rth, magImage_rth, 0, 1, CV_MINMAX);
 	imshow("X線投影像1次元FFT結果", magImage_rth);
+	//	結果の保存
+	normalize(magImage_rth, magImage_rth, 0, 255, CV_MINMAX);
+	magImage_rth.convertTo(magImage_rth, CV_8UC1);
+	imwrite("FFT1D_projection_rth.png", magImage_rth);
 
 	//	2. G(s, th)をF(u,v)空間に並べ替える
 	//	u = s * cos(th), v = s * sin(th)
-	Size optDFTSize_uv(getOptimalDFTSize(src.cols), getOptimalDFTSize(src.rows));
+	Size optDFTSize_uv(getOptimalDFTSize(projectedImage.cols), getOptimalDFTSize(projectedImage.cols));
 	Mat complexDFTPlanes_uv[] 
 		= { Mat::zeros(optDFTSize_uv, CV_64FC1), Mat::zeros(optDFTSize_uv, CV_64FC1) };
 	//	サブピクセルサンプリングのためにfloat型に変換
@@ -185,6 +194,10 @@ int main(void)
 	log(magImage_uv, magImage_uv);
 	normalize(magImage_uv, magImage_uv, 0, 1, CV_MINMAX);
 	imshow("X線投影像2次元FFT復元結果", magImage_uv);
+	//	結果の保存
+	normalize(magImage_uv, magImage_uv, 0, 255, CV_MINMAX);
+	magImage_uv.convertTo(magImage_uv, CV_8UC1);
+	imwrite("FFT1D_projection_xy.png", magImage_uv);
 
 	//	3. F(u,v)からf(x,y)を復元
 	cvutil::fftShift(complexDFTImage_uv, complexDFTImage_uv);
@@ -195,6 +208,10 @@ int main(void)
 	Mat invImage_scaled;
 	normalize(complexInvDFTPlanes[0], invImage_scaled, 0, 1, CV_MINMAX);
 	imshow("投影像からの復元結果", invImage_scaled);
+	//	結果の保存
+	normalize(invImage_scaled, invImage_scaled, 0, 255, CV_MINMAX);
+	invImage_scaled.convertTo(invImage_scaled, CV_8UC1);
+	imwrite("inverseFFT2D_projection_xy.png", invImage_scaled);
 	waitKey();
 
 	//---------------------------------------------------------------------------------------------
