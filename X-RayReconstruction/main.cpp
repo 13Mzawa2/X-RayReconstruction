@@ -33,8 +33,9 @@ int main(void)
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
 	const int div_rotation = 360;						//	360分割して撮影
-	Mat projectedImage = Mat::zeros(div_rotation, 820, CV_64FC1);	//	投影像ベクトルの集合 行数が角度
+	Mat projectedImage = Mat(div_rotation, 820, CV_64FC1, Scalar::all(0));	//	投影像ベクトルの集合 行数が角度
 	Mat sampledImage = projectedImage.clone();
+	cout << "投影像サイズ : " << projectedImage.size() << endl;
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
 		double theta = CV_PI / div_rotation * th;		//	角度radに変換（全部で180deg）
@@ -46,25 +47,10 @@ int main(void)
 		Mat affine = getRotationMatrix2D(Point2d(rotatedImage.cols / 2, rotatedImage.rows / 2), -theta / CV_PI * 180, 1.0);		//	アフィン変換行列
 		warpAffine(rotatedImage, rotatedImage, affine, rotatedImage.size());
 		//	画像下からX線を当てて画像上部で撮影
-		Mat reduceRow, clippedRow;
+		Mat reduceRow;
 		reduce(rotatedImage, reduceRow, 0, REDUCE_AVG);	//　行をそのまま平均化
-		if (projectedImage.cols < reduceRow.cols) {
-			for (int i = 0; i < projectedImage.cols; i++) {
-				projectedImage.row(th).at<double>(i)
-					= reduceRow.at<double>(i + reduceRow.cols / 2 - projectedImage.cols / 2); 
-				sampledImage.row(th).at<double>(i) 
-					= rotatedImage.at<double>(rotatedImage.rows / 2, reduceRow.cols / 2 - projectedImage.cols / 2);
-			}
-		}
-		else {
-			for (int i = 0; i < reduceRow.cols; i++) {
-				projectedImage.row(th).at<double>(i - reduceRow.cols / 2 + projectedImage.cols / 2)
-					= reduceRow.at<double>(i);
-				sampledImage.row(th).at<double>(i - reduceRow.cols / 2 + projectedImage.cols / 2)
-					= rotatedImage.at<double>(rotatedImage.rows / 2, i);
-
-			}
-		}
+		reduceRow.copyTo(projectedImage.row(th));
+		rotatedImage.row(rotatedImage.rows/2).copyTo(sampledImage.row(th));
 		//	撮影中画像を表示
 		normalize(rotatedImage, rotatedImage, 0, 1, CV_MINMAX);
 		imshow("test", rotatedImage);
@@ -74,12 +60,35 @@ int main(void)
 		sampledImage.convertTo(sampledImage_scaled, CV_8UC1);
 		imshow("X線投影像", projectedImage_scaled);
 		imshow("r-theta座標系", sampledImage_scaled);
+		cout << "Captureing... :" << th << " / " << div_rotation << "\r";
 		waitKey(1);
 	}
+	//	(r,th)座標系に並べた画像を(x,y)座標系に円形に並べる（元に戻す）
+	Mat sampledImage_reconst = Mat::zeros(sampledImage.cols, sampledImage.cols, CV_64FC1);
+	Mat sampledImage_f;
+	sampledImage.convertTo(sampledImage_f, CV_32F);
+	for (int i = 0; i < sampledImage_reconst.rows; i++) {
+		for (int j = 0; j < sampledImage_reconst.cols; j++) {
+			Point2d center_uv(sampledImage_reconst.cols / 2, sampledImage_reconst.rows / 2);
+			Point2d p_uv(j - center_uv.x, -i + center_uv.y);	//	現在のスコープ座標(u,v)
+			double radius = norm(p_uv);
+			Point2d p_sth;					//	p_uvに対応するg(r, th)でのサンプル点
+											//	原点からの距離が投影像のr軸よりも大きい場合は0とする
+			if (radius > sampledImage.cols / 2.0) {
+				sampledImage_reconst.at<double>(i, j) = 0.0;
+				continue;
+			}
+			//	p_uvを変数変換してp_sthに代入
+			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
+			p_sth.x = (theta > 0) ? sampledImage.cols / 2.0 + radius : sampledImage.cols / 2.0 - radius;
+			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
+			sampledImage_reconst.at<double>(i, j) = cvutil::sampleSubPix(sampledImage_f, p_sth);
+		}
+	}
+	normalize(sampledImage_reconst, sampledImage_reconst, 0, 1, CV_MINMAX);
+	imshow("r-theta座標系を円形に並べる", sampledImage_reconst);
 	imshow("test", src);
-	cout << endl << "capture finished!!" << endl;
-	//	360deg投影像を表示
-	//normalize(projectedImage, projectedImage_scaled, 0, 1, CV_MINMAX);
+	cout << endl << "Capture finished!!" << endl;
 	waitKey();
 	//	画像の保存
 	imwrite("x-ray_projection.png", projectedImage);
@@ -234,9 +243,9 @@ int main(void)
 		= { Mat::zeros(complexDFTImage_rth_s.size(), CV_64FC1), Mat::zeros(complexDFTImage_rth_s.size(), CV_64FC1) };
 	split(complexDFTImage_rth_s, complexDFTPlanes_rth_s);
 	Mat magImage_rth_s;
-	//magnitude(complexDFTPlanes_rth_s[0], complexDFTPlanes_rth_s[1], magImage_rth_s);
-	//magImage_rth_s += Scalar::all(1);
-	//log(magImage_rth_s, magImage_rth_s);
+	magnitude(complexDFTPlanes_rth_s[0], complexDFTPlanes_rth_s[1], magImage_rth_s);
+	magImage_rth_s += Scalar::all(1);
+	log(magImage_rth_s, magImage_rth_s);
 	normalize(complexDFTPlanes_rth_s[0], magImage_rth_s, 0, 1, CV_MINMAX);
 	imshow("X線投影像1次元FFT+高域強調フィルタ", magImage_rth_s);
 
