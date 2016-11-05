@@ -78,11 +78,13 @@ int main(void)
 	//---------------------------------------------------------------------------------------------
 	//	3.0 まずはDFTに慣れるために元画像のFFTを行う（自分の学習用）．
 	//	DFTに最適なサイズを取得（元画像より大きい）
-	Size optDFTSize(getOptimalDFTSize(srcd.cols),getOptimalDFTSize(srcd.rows));
+	Size optDFTSize(projectedImage.cols, projectedImage.cols);//(getOptimalDFTSize(projectedImage.cols),getOptimalDFTSize(projectedImage.cols));
 	Mat optDFTImg;		//	元画像の余りを0で埋めた画像
-	copyMakeBorder(srcd, optDFTImg, 0, optDFTSize.height - srcd.rows, 0, optDFTSize.width - srcd.cols, BORDER_CONSTANT, Scalar::all(0));
+	int offsety = projectedImage.cols - srcd.rows;
+	int offsetx = projectedImage.cols - srcd.cols;
+	copyMakeBorder(srcd, optDFTImg, offsety / 2, offsety / 2, offsetx / 2, offsetx / 2, BORDER_CONSTANT, Scalar::all(0));
 	//複素数画像complexImg（実部ch/虚部chの2ch）を生成
-	Mat complexPlanes[] = { Mat_<double>(optDFTImg), Mat::zeros(optDFTSize, CV_64F) };
+	Mat complexPlanes[] = { Mat_<double>(optDFTImg), Mat::zeros(optDFTImg.size(), CV_64F) };
 	Mat complexImg;		//	ここにDFTの結果が入る
 	merge(complexPlanes, 2, complexImg);
 	//	DFT実行（実際にはFFT）
@@ -103,7 +105,7 @@ int main(void)
 	imwrite("FFT_spectrum_from_src.png", magImg);
 	//	逆フーリエ変換
 	Mat invDFTImg = complexImg;
-	Mat invDFTplanes[] = { Mat_<double>(optDFTImg), Mat::zeros(optDFTSize, CV_64F) };
+	Mat invDFTplanes[] = { Mat_<double>(optDFTImg), Mat::zeros(optDFTImg.size(), CV_64F) };
 	cvutil::fftShift(invDFTImg, complexImg);
 	dft(complexImg, invDFTImg, DFT_INVERSE + DFT_SCALE);	//	FFT結果をそのまま逆FFTにかける
 	split(invDFTImg, invDFTplanes);		//	逆DFTの結果は実部に出てくる
@@ -117,7 +119,7 @@ int main(void)
 	waitKey();
 
 	//	1. 撮影画像g(r, th)を1次元フーリエ変換してG(s, th)を得る
-	double optDFTSize_rth = getOptimalDFTSize(projectedImage.cols);
+	double optDFTSize_rth = projectedImage.cols;//getOptimalDFTSize(projectedImage.cols);
 	Mat optDFTImage_rth;
 	copyMakeBorder(projectedImage, optDFTImage_rth, 0, 0, 0, optDFTSize_rth - projectedImage.cols, BORDER_CONSTANT, Scalar::all(0));
 	//	複素数画像を作成
@@ -142,7 +144,7 @@ int main(void)
 
 	//	2. G(s, th)をF(u,v)空間に並べ替える
 	//	u = s * cos(th), v = s * sin(th)
-	Size optDFTSize_uv(getOptimalDFTSize(projectedImage.cols), getOptimalDFTSize(projectedImage.cols));
+	Size optDFTSize_uv(optDFTSize_rth, optDFTSize_rth);
 	Mat complexDFTPlanes_uv[] 
 		= { Mat::zeros(optDFTSize_uv, CV_64FC1), Mat::zeros(optDFTSize_uv, CV_64FC1) };
 	//	サブピクセルサンプリングのためにfloat型に変換
@@ -166,15 +168,13 @@ int main(void)
 			//	p_uvを変数変換してp_sthに代入
 			p_sth.x = (theta > 0) ? center_uv.x + radius : center_uv.x - radius;
 			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
-
-			complexDFTPlanes_uv[0].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
-			complexDFTPlanes_uv[1].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_im, p_sth);
+			//if (p_sth.y > div_rotation - 1)p_sth.y = div_rotation - 1;
+			complexDFTPlanes_uv[0].at<double>(i, j) = /*complexDFTPlanes_rth[0].at<double>(p_sth);*/cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
+			complexDFTPlanes_uv[1].at<double>(i, j) = /*complexDFTPlanes_rth[1].at<double>(p_sth);*/cvutil::sampleSubPix(complexDFTPlane_sth_im, p_sth);
 		}
 	}
 	Mat complexDFTImage_uv;
 	merge(complexDFTPlanes_uv, 2, complexDFTImage_uv);
-	Rect invDFTSize((optDFTSize_uv.width - projectedImage.cols) / 2, (optDFTSize_uv.height - projectedImage.cols) / 2, projectedImage.cols, projectedImage.cols);
-	Mat(complexDFTImage_uv, invDFTSize).copyTo(complexDFTImage_uv);
 	//	DFT結果表示
 	split(complexDFTImage_uv, complexDFTPlanes_uv);
 	Mat magImage_uv;
@@ -253,9 +253,10 @@ int main(void)
 		normalize(invDFTImage_filter, invDFTImage_filter_scaled, 0, 255, CV_MINMAX);
 		invDFTImage_filter_scaled.convertTo(invDFTImage_filter_scaled, CV_8U);
 		imshow("高域強調フィルタの結果", invDFTImage_filter_scaled);
-		cout << "reconstructing... : " << th << " / " << div_rotation << endl;
+		cout << "reconstructing... : " << th << " / " << div_rotation << "\r";
 		waitKey(1);
 	}
+	cout << "reconstruction finished!" << endl;
 	normalize(invDFTImage_filter, invDFTImage_filter, 0, 255, CV_MINMAX);
 	invDFTImage_filter.convertTo(invDFTImage_filter, CV_8U);
 	imwrite("s_filter_reconstruction.png", invDFTImage_filter);
