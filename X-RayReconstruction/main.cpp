@@ -1,14 +1,14 @@
 #include <opencv2\opencv.hpp>
 #include "CVUtil.h"
-#pragma region OPENCV3_LIBRARY_LINKER
-#ifdef _DEBUG
-#define CV_EXT "d.lib"
-#else
-#define CV_EXT ".lib"
-#endif
-#define CV_VER  CVAUX_STR(CV_MAJOR_VERSION) CVAUX_STR(CV_MINOR_VERSION) CVAUX_STR(CV_SUBMINOR_VERSION)
-#pragma comment(lib, "opencv_world" CV_VER CV_EXT)
-#pragma endregion
+//#pragma region OPENCV3_LIBRARY_LINKER
+//#ifdef _DEBUG
+//#define CV_EXT "d.lib"
+//#else
+//#define CV_EXT ".lib"
+//#endif
+//#define CV_VER  CVAUX_STR(CV_MAJOR_VERSION) CVAUX_STR(CV_MINOR_VERSION) CVAUX_STR(CV_SUBMINOR_VERSION)
+//#pragma comment(lib, "opencv_world" CV_VER CV_EXT)
+//#pragma endregion
 
 using namespace cv;
 using namespace std;
@@ -33,8 +33,9 @@ int main(void)
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
 	const int div_rotation = 360;						//	360分割して撮影
-	Mat projectedImage = Mat(div_rotation, 800, CV_64FC1, Scalar::all(128.0));	//	投影像ベクトルの集合 行数が角度
-	Mat sampledImage = projectedImage.clone();
+	Scalar src_mean = mean(srcd);
+	//srcd -= src_mean;
+	Mat projectedImage = Mat(div_rotation, 880, CV_64FC1, Scalar::all(0));	//	投影像ベクトルの集合 行数が角度
 	cout << "投影像サイズ : " << projectedImage.size() << endl;
 	//	回転角theta
 	for (int th = 0; th < div_rotation; th++) {
@@ -43,68 +44,31 @@ int main(void)
 		Mat rotatedImage;
 		int offsety = projectedImage.cols - srcd.rows;
 		int offsetx = projectedImage.cols - srcd.cols;
-		copyMakeBorder(srcd, rotatedImage, offsety / 2, offsety / 2, offsetx / 2, offsetx / 2, BORDER_CONSTANT, Scalar::all(128));
+		copyMakeBorder(srcd, rotatedImage, offsety / 2, offsety / 2, offsetx / 2, offsetx / 2, BORDER_CONSTANT, Scalar::all(0));
 		Mat affine = getRotationMatrix2D(Point2d(rotatedImage.cols / 2, rotatedImage.rows / 2), -theta / CV_PI * 180, 1.0);		//	アフィン変換行列
-		warpAffine(rotatedImage, rotatedImage, affine, rotatedImage.size(), 1, 0, Scalar::all(128));
+		warpAffine(rotatedImage, rotatedImage, affine, rotatedImage.size(), 1, 0, Scalar::all(0));
 		//	画像下からX線を当てて画像上部で撮影
 		Mat reduceRow(Size(rotatedImage.cols,1), CV_64FC1, Scalar::all(0));
-		//reduce(rotatedImage, reduceRow, 0, REDUCE_AVG);	//　行をそのまま平均化
-		for (int i = 0; i < rotatedImage.cols; i++) {
-			int count = 0;
-			for (int j = 0; j < rotatedImage.rows; j++) {
-				reduceRow.at<double>(i) += rotatedImage.at<double>(j, i);
-				if (rotatedImage.at<double>(j, i) == -1) {
-					count++;
-				}
-			}
-			if (count != 0) {
-				reduceRow.at<double>(i) /= (double)count;
-			}
-		}
+		reduce(rotatedImage, reduceRow, 0, REDUCE_SUM);	//　行をそのまま加算
 		reduceRow.copyTo(projectedImage.row(th));
-		rotatedImage.row(rotatedImage.rows/2).copyTo(sampledImage.row(th));
 		//	撮影中画像を表示
 		normalize(rotatedImage, rotatedImage, 0, 1, CV_MINMAX);
 		imshow("test", rotatedImage);
 		Mat projectedImage_scaled;
-		Mat sampledImage_scaled;
 		normalize(projectedImage, projectedImage_scaled, 0, 255, CV_MINMAX);
 		projectedImage_scaled.convertTo(projectedImage_scaled, CV_8UC1);
-		sampledImage.convertTo(sampledImage_scaled, CV_8UC1);
 		imshow("X線投影像", projectedImage_scaled);
-		imshow("r-theta座標系", sampledImage_scaled);
 		cout << "Captureing... :" << th << " / " << div_rotation << "\r";
 		waitKey(1);
 	}
-	//	(r,th)座標系に並べた画像を(x,y)座標系に円形に並べる（元に戻す）
-	Mat sampledImage_reconst = Mat::zeros(sampledImage.cols, sampledImage.cols, CV_64FC1);
-	Mat sampledImage_f;
-	sampledImage.convertTo(sampledImage_f, CV_32F);
-	for (int i = 0; i < sampledImage_reconst.rows; i++) {
-		for (int j = 0; j < sampledImage_reconst.cols; j++) {
-			Point2d center_uv(sampledImage_reconst.cols / 2, sampledImage_reconst.rows / 2);
-			Point2d p_uv(j - center_uv.x, -i + center_uv.y);	//	現在のスコープ座標(u,v)
-			double radius = norm(p_uv);
-			Point2d p_sth;					//	p_uvに対応するg(r, th)でのサンプル点
-											//	原点からの距離が投影像のr軸よりも大きい場合は0とする
-			if (radius > sampledImage.cols / 2.0) {
-				sampledImage_reconst.at<double>(i, j) = 0.0;
-				continue;
-			}
-			//	p_uvを変数変換してp_sthに代入
-			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
-			p_sth.x = (theta > 0) ? sampledImage.cols / 2.0 + radius : sampledImage.cols / 2.0 - radius;
-			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
-			sampledImage_reconst.at<double>(i, j) = cvutil::sampleSubPix(sampledImage_f, p_sth);
-		}
-	}
-	normalize(sampledImage_reconst, sampledImage_reconst, 0, 1, CV_MINMAX);
-	imshow("r-theta座標系を円形に並べる", sampledImage_reconst);
 	imshow("test", src);
 	cout << endl << "Capture finished!!" << endl;
 	waitKey();
 	//	画像の保存
-	imwrite("x-ray_projection.png", projectedImage);
+	Mat projectedImage_scaled;
+	normalize(projectedImage, projectedImage_scaled, 0, 255, CV_MINMAX);
+	projectedImage_scaled.convertTo(projectedImage_scaled, CV_8U);
+	imwrite("x-ray_projection.png", projectedImage_scaled);
 
 	//---------------------------------------------------------------------------------------------
 	//	3. 投影像からの再構成（フーリエ変換法）
@@ -189,6 +153,8 @@ int main(void)
 		for (int j = 0; j < optDFTSize_uv.width; j++) {
 			Point2d center_uv(optDFTSize_uv.width / 2, optDFTSize_uv.height / 2);
 			Point2d p_uv(j - center_uv.x, - i + center_uv.y);	//	現在のスコープ座標(u,v)
+			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
+			//double radius = p_uv.x * cos(theta) + p_uv.y * sin(theta);
 			double radius = norm(p_uv);
 			Point2d p_sth;					//	p_uvに対応するG(s, th)でのサンプル点
 			//	原点からの距離が投影像のr軸よりも大きい場合は0とする
@@ -198,8 +164,7 @@ int main(void)
 				continue;
 			}
 			//	p_uvを変数変換してp_sthに代入
-			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
-			p_sth.x = (theta > 0) ? optDFTSize_rth/2.0 + radius : optDFTSize_rth/2.0 - radius;
+			p_sth.x = (theta > 0) ? center_uv.x + radius : center_uv.x - radius;
 			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
 
 			complexDFTPlanes_uv[0].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
@@ -208,7 +173,8 @@ int main(void)
 	}
 	Mat complexDFTImage_uv;
 	merge(complexDFTPlanes_uv, 2, complexDFTImage_uv);
-	resize(complexDFTImage_uv, complexDFTImage_uv, src.size());
+	Rect invDFTSize((optDFTSize_uv.width - projectedImage.cols) / 2, (optDFTSize_uv.height - projectedImage.cols) / 2, projectedImage.cols, projectedImage.cols);
+	Mat(complexDFTImage_uv, invDFTSize).copyTo(complexDFTImage_uv);
 	//	DFT結果表示
 	split(complexDFTImage_uv, complexDFTPlanes_uv);
 	Mat magImage_uv;
@@ -241,7 +207,7 @@ int main(void)
 	//	4. 投影像からの再構成（フィルタ補正逆投影法）
 	//	周波数領域での積が空間領域での畳込み演算として記述可能なことを利用する．
 	//	フーリエ変換法における投影像の１次元フーリエ変換は，投影像に高域強調フィルタ|s|を畳み込む演算と
-	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xyの角度th上に並べてやると
+	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xyの角度th上に積算すると
 	//	元画像が平面xyに復元される．
 	//---------------------------------------------------------------------------------------------
 	//	G(s, th)に高域強調フィルタをかけて逆変換
@@ -259,42 +225,40 @@ int main(void)
 	log(magImage_rth_s, magImage_rth_s);
 	normalize(complexDFTPlanes_rth_s[0], magImage_rth_s, 0, 1, CV_MINMAX);
 	imshow("X線投影像1次元FFT+高域強調フィルタ", magImage_rth_s);
-	cvutil::fftShift1D(complexDFTImage_rth_s, complexDFTImage_rth_s);
 	waitKey();
+	//	逆DFT
+	cvutil::fftShift1D(complexDFTImage_rth_s, complexDFTImage_rth_s);
 	dft(complexDFTImage_rth_s, complexDFTImage_rth_s, DFT_INVERSE + DFT_SCALE + DFT_ROWS);
 	//	DFT結果表示
 	split(complexDFTImage_rth_s, complexDFTPlanes_rth_s);
 	Mat magImage_rth_s_inv;
-	//magnitude(complexDFTPlanes_rth_s[0], complexDFTPlanes_rth_s[1], magImage_rth_s_inv);
-	//magImage_rth_s += Scalar::all(1);
-	//log(magImage_rth_s_inv, magImage_rth_s_inv);
 	normalize(complexDFTPlanes_rth_s[0], magImage_rth_s_inv, 0, 1, CV_MINMAX);
 	imshow("X線投影像1次元FFT+高域強調フィルタ", magImage_rth_s_inv);
 
-	//	円形に並べる
-	Mat invDFTImage_filter = Mat::zeros(src.size(), CV_64FC1);
-	Mat magImage_rth_s_f;
-	magImage_rth_s_inv.convertTo(magImage_rth_s_f, CV_32F);
-	for (int i = 0; i < src.rows; i++) {
-		for (int j = 0; j < src.cols; j++) {
-			Point2d center_uv(src.cols / 2, src.rows / 2);
-			Point2d p_uv(j - center_uv.x, -i + center_uv.y);	//	現在のスコープ座標(u,v)
-			double radius = norm(p_uv);
-			Point2d p_sth;					//	p_uvに対応するg(r, th)でのサンプル点
-			//	原点からの距離が投影像のr軸よりも大きい場合は0とする
-			if (radius > optDFTSize_rth / 2.0) {
-				invDFTImage_filter.at<double>(i, j) = 0.0;
-				continue;
+	//	積算
+	Mat invDFTImage_filter = Mat::zeros(Size(projectedImage.cols,projectedImage.cols), CV_64FC1);
+	for (int th = 0; th < div_rotation; th++) {
+		double theta = th * CV_PI / div_rotation;		//	[0, PI]
+		Point2d center(invDFTImage_filter.cols / 2, invDFTImage_filter.rows / 2);
+		for (int i = 0; i < invDFTImage_filter.rows; i++) {
+			for (int j = 0; j < invDFTImage_filter.cols; j++) {
+				Point2d p(j - center.x, -i + center.y);
+				//	r軸の法線方向に同じ値を加える
+				double r = p.x*cos(theta) + p.y*sin(theta);
+				if (r < -center.x)r = -center.x; else if (r >= center.x) r = center.x;
+				invDFTImage_filter.at<double>(i, j) += complexDFTPlanes_rth_s[0].at<double>(th, (int)(r+center.x));
 			}
-			//	p_uvを変数変換してp_sthに代入
-			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
-			p_sth.x = (theta > 0) ? optDFTSize_rth / 2.0 + radius : optDFTSize_rth / 2.0 - radius;
-			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
-			invDFTImage_filter.at<double>(i, j) = cvutil::sampleSubPix(magImage_rth_s_f, p_sth);
 		}
+		Mat invDFTImage_filter_scaled;
+		normalize(invDFTImage_filter, invDFTImage_filter_scaled, 0, 255, CV_MINMAX);
+		invDFTImage_filter_scaled.convertTo(invDFTImage_filter_scaled, CV_8U);
+		imshow("高域強調フィルタの結果", invDFTImage_filter_scaled);
+		cout << "reconstructing... : " << th << " / " << div_rotation << endl;
+		waitKey(1);
 	}
-	imshow("高域強調フィルタの結果", invDFTImage_filter);
-
+	normalize(invDFTImage_filter, invDFTImage_filter, 0, 255, CV_MINMAX);
+	invDFTImage_filter.convertTo(invDFTImage_filter, CV_8U);
+	imwrite("s_filter_reconstruction.png", invDFTImage_filter);
 	waitKey();
 	
 	return 0;
