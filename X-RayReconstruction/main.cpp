@@ -33,8 +33,6 @@ int main(void)
 	//	2. 1次元X線投影像を全周方向で撮影
 	//---------------------------------------
 	const int div_rotation = 360;						//	360分割して撮影
-	Scalar src_mean = mean(srcd);
-	//srcd -= src_mean;
 	Mat projectedImage = Mat(div_rotation, 880, CV_64FC1, Scalar::all(0));	//	投影像ベクトルの集合 行数が角度
 	cout << "投影像サイズ : " << projectedImage.size() << endl;
 	//	回転角theta
@@ -44,7 +42,7 @@ int main(void)
 		Mat rotatedImage;
 		int offsety = projectedImage.cols - srcd.rows;
 		int offsetx = projectedImage.cols - srcd.cols;
-		copyMakeBorder(srcd, rotatedImage, offsety / 2, offsety / 2, offsetx / 2, offsetx / 2, BORDER_CONSTANT, Scalar::all(0));
+		copyMakeBorder(srcd, rotatedImage, offsety / 2, offsety / 2, offsetx / 2, offsetx / 2, BORDER_CONSTANT, Scalar::all(0));//	画像中心と回転中心を合わせる
 		Mat affine = getRotationMatrix2D(Point2d(rotatedImage.cols / 2, rotatedImage.rows / 2), -theta / CV_PI * 180, 1.0);		//	アフィン変換行列
 		warpAffine(rotatedImage, rotatedImage, affine, rotatedImage.size(), 1, 0, Scalar::all(0));
 		//	画像下からX線を当てて画像上部で撮影
@@ -72,7 +70,7 @@ int main(void)
 
 	//---------------------------------------------------------------------------------------------
 	//	3. 投影像からの再構成（フーリエ変換法）
-	//	投影像の角度固定1次元(r)フーリエ変換＝元画像の2次元(x,y)フーリエ変換　という数学的事実を利用する．
+	//	投影像の角度固定1次元(r)フーリエ変換＝元画像の2次元(x,y)フーリエ変換　という数学的事実（投影定理）を利用する．
 	//	角度thでの投影像の１次元フーリエ変換結果を，周波数平面uv上の角度thの方向に並べてから
 	//	平面uvを２次元逆フーリエ変換すると元画像が復元される．
 	//---------------------------------------------------------------------------------------------
@@ -129,8 +127,8 @@ int main(void)
 	//	1次元DFT実行
 	dft(complexDFTImage_rth, complexDFTImage_rth, DFT_ROWS);
 	cvutil::fftShift1D(complexDFTImage_rth, complexDFTImage_rth);	//	FFT画像反転
-	//	DFT結果表示
 	split(complexDFTImage_rth, complexDFTPlanes_rth);
+	//	DFT結果表示
 	Mat magImage_rth;
 	magnitude(complexDFTPlanes_rth[0], complexDFTPlanes_rth[1], magImage_rth);
 	magImage_rth += Scalar::all(1);
@@ -168,9 +166,8 @@ int main(void)
 			//	p_uvを変数変換してp_sthに代入
 			p_sth.x = (theta > 0) ? center_uv.x + radius : center_uv.x - radius;
 			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
-			//if (p_sth.y > div_rotation - 1)p_sth.y = div_rotation - 1;
-			complexDFTPlanes_uv[0].at<double>(i, j) = /*complexDFTPlanes_rth[0].at<double>(p_sth);*/cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
-			complexDFTPlanes_uv[1].at<double>(i, j) = /*complexDFTPlanes_rth[1].at<double>(p_sth);*/cvutil::sampleSubPix(complexDFTPlane_sth_im, p_sth);
+			complexDFTPlanes_uv[0].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
+			complexDFTPlanes_uv[1].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_im, p_sth);
 		}
 	}
 	Mat complexDFTImage_uv;
@@ -189,8 +186,8 @@ int main(void)
 	imwrite("FFT1D_projection_xy.png", magImage_uv);
 
 	//	3. F(u,v)からf(x,y)を復元
-	cvutil::fftShift(complexDFTImage_uv, complexDFTImage_uv);
 	Mat complexInvDFTImage;
+	cvutil::fftShift(complexDFTImage_uv, complexDFTImage_uv);
 	dft(complexDFTImage_uv, complexInvDFTImage, DFT_INVERSE + DFT_SCALE);
 	Mat complexInvDFTPlanes[] = { Mat::zeros(optDFTSize_uv, CV_64F), Mat::zeros(optDFTSize_uv, CV_64F) };
 	split(complexInvDFTImage, complexInvDFTPlanes);
@@ -207,7 +204,7 @@ int main(void)
 	//	4. 投影像からの再構成（フィルタ補正逆投影法）
 	//	周波数領域での積が空間領域での畳込み演算として記述可能なことを利用する．
 	//	フーリエ変換法における投影像の１次元フーリエ変換は，投影像に高域強調フィルタ|s|を畳み込む演算と
-	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xyの角度th上に積算すると
+	//	数学的に同値なので，フィルタ|s|を畳み込んだ投影像を平面xy上で角度thの波としてthで積分すると
 	//	元画像が平面xyに復元される．
 	//---------------------------------------------------------------------------------------------
 	//	G(s, th)に高域強調フィルタをかけて逆変換
@@ -239,7 +236,7 @@ int main(void)
 	Mat invDFTImage_filter = Mat::zeros(Size(projectedImage.cols,projectedImage.cols), CV_64FC1);
 	for (int th = 0; th < div_rotation; th++) {
 		double theta = th * CV_PI / div_rotation;		//	[0, PI]
-		Point2d center(invDFTImage_filter.cols / 2, invDFTImage_filter.rows / 2);
+		Point2d center(invDFTImage_filter.cols / 2 - 0.5, invDFTImage_filter.rows / 2 - 0.5);
 		for (int i = 0; i < invDFTImage_filter.rows; i++) {
 			for (int j = 0; j < invDFTImage_filter.cols; j++) {
 				Point2d p(j - center.x, -i + center.y);
