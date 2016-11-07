@@ -153,19 +153,19 @@ int main(void)
 		for (int j = 0; j < optDFTSize_uv.width; j++) {
 			Point2d center_uv(optDFTSize_uv.width / 2, optDFTSize_uv.height / 2);
 			Point2d p_uv(j - center_uv.x, - i + center_uv.y);	//	現在のスコープ座標(u,v)
-			double theta = atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
+			double theta = (p_uv.x == 0 && p_uv.y == 0) ? 0: atan2(p_uv.y, p_uv.x);		//	[-PI, PI]
 			//double radius = p_uv.x * cos(theta) + p_uv.y * sin(theta);
 			double radius = norm(p_uv);
 			Point2d p_sth;					//	p_uvに対応するG(s, th)でのサンプル点
 			//	原点からの距離が投影像のr軸よりも大きい場合は0とする
-			if (radius > optDFTSize_rth / 2.0) {
+			if (radius > center_uv.x) {
 				complexDFTPlanes_uv[0].at<double>(i, j) = 0.0;	//	実部
 				complexDFTPlanes_uv[1].at<double>(i, j) = 0.0;	//	虚部
 				continue;
 			}
 			//	p_uvを変数変換してp_sthに代入
 			p_sth.x = (theta > 0) ? center_uv.x + radius : center_uv.x - radius;
-			p_sth.y = (theta > 0) ? theta*div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
+			p_sth.y = (theta > 0) ? theta * div_rotation / CV_PI : (theta + CV_PI) * div_rotation / CV_PI;
 			complexDFTPlanes_uv[0].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_re, p_sth);
 			complexDFTPlanes_uv[1].at<double>(i, j) = cvutil::sampleSubPix(complexDFTPlane_sth_im, p_sth);
 		}
@@ -210,7 +210,7 @@ int main(void)
 	//	G(s, th)に高域強調フィルタをかけて逆変換
 	Mat complexDFTImage_rth_s = complexDFTImage_rth.clone();
 	for (int i = 0; i < complexDFTImage_rth_s.cols; i++) {
-		double d = abs(i - complexDFTImage_rth_s.cols/2);
+		double d = abs(i - complexDFTImage_rth_s.cols/2 + 0.5);
 		complexDFTImage_rth_s.col(i) *= d;
 	}
 	Mat complexDFTPlanes_rth_s[]
