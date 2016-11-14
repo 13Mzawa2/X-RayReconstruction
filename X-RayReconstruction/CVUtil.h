@@ -41,4 +41,13 @@ namespace cvutil
 		cv::Mat q1(dstImg, cv::Rect(center.x, 0, center.x, center.y*2));
 		cvutil::swapMat(q0, q1);
 	}
+	void fftMagnitude(cv::Mat srcImg, cv::Mat &dstImg)
+	{
+		std::vector<cv::Mat> srcPlanes;
+		cv::split(srcImg, srcPlanes);
+		cv::magnitude(srcPlanes[0], srcPlanes[1], dstImg);
+		dstImg += cv::Scalar::all(1);
+		cv::log(dstImg, dstImg);
+		cv::normalize(dstImg, dstImg, 0, 1, CV_MINMAX);
+	}
 }
